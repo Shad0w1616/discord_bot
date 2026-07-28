@@ -392,7 +392,7 @@ bot = commands.Bot(
 YTDLP_OPTIONS = {
     "format": "bestaudio/best",
 
-    # Теперь плейлисты разрешены
+    # Разрешаем обработку плейлистов
     "noplaylist": False,
 
     "skip_download": True,
@@ -428,7 +428,7 @@ FFMPEG_PATH = (
 
 
 # ============================================================
-# Регулярные выражения для YouTube
+# Проверка YouTube-ссылок
 # ============================================================
 
 YOUTUBE_URL_PATTERN = re.compile(
@@ -436,17 +436,6 @@ YOUTUBE_URL_PATTERN = re.compile(
     r"(youtube\.com|youtu\.be)/.+$"
 )
 
-
-YOUTUBE_PLAYLIST_PATTERN = re.compile(
-    r"^(https?://)?(www\.)?"
-    r"(youtube\.com|www\.youtube-nocookie\.com)"
-    r"/(playlist\?list=|watch\?.*list=).+$"
-)
-
-
-# ============================================================
-# Проверка YouTube-ссылки
-# ============================================================
 
 def is_youtube_url(query: str) -> bool:
 
@@ -456,24 +445,13 @@ def is_youtube_url(query: str) -> bool:
 
 
 # ============================================================
-# Проверка YouTube-плейлиста
-# ============================================================
-
-def is_youtube_playlist(query: str) -> bool:
-
-    return bool(
-        YOUTUBE_PLAYLIST_PATTERN.match(query)
-    )
-
-
-# ============================================================
 # Получение информации о треке или плейлисте
 # ============================================================
 
 def get_video_info(query: str) -> dict:
 
-    # Если пользователь ввёл обычный текст,
-    # ищем первый результат на YouTube
+    # Если введён обычный текст,
+    # ищем первый трек на YouTube
     if not is_youtube_url(query):
 
         query = (
@@ -491,18 +469,10 @@ def get_video_info(query: str) -> dict:
         )
 
 
-    # Если это обычный поисковый запрос,
-    # берём первый результат
+    # Поисковый запрос
     if "entries" in info:
 
         entries = info["entries"]
-
-
-        # Для плейлиста entries содержит
-        # все видео.
-        #
-        # Для ytsearch1 entries содержит
-        # один результат.
 
 
         if not entries:
@@ -512,15 +482,17 @@ def get_video_info(query: str) -> dict:
             )
 
 
-        # Если это плейлист,
-        # возвращаем всю информацию
-        if info.get("_type") == "playlist":
+        # Если это плейлист —
+        # возвращаем весь плейлист
+        if info.get(
+            "_type"
+        ) == "playlist":
 
             return info
 
 
-        # Если это результат поиска,
-        # возвращаем первый трек
+        # Если это поиск —
+        # возвращаем первый результат
         return entries[0]
 
 
@@ -542,28 +514,90 @@ async def get_audio_info(
 
 
 # ============================================================
+# Получение свежей ссылки на аудиопоток
+# ============================================================
+
+async def get_stream_url(
+    webpage_url: str
+) -> str:
+
+    loop = asyncio.get_running_loop()
+
+
+    def extract_stream():
+
+        options = {
+
+            "format": "bestaudio/best",
+
+            "quiet": True,
+
+            "no_warnings": True,
+
+            "noplaylist": True,
+
+        }
+
+
+        with yt_dlp.YoutubeDL(
+            options
+        ) as ydl:
+
+            info = ydl.extract_info(
+                webpage_url,
+
+                download=False
+            )
+
+
+            return info["url"]
+
+
+    return await loop.run_in_executor(
+        None,
+        extract_stream
+    )
+
+
+# ============================================================
 # Очередь треков
 # ============================================================
+
+# Для каждого сервера отдельная очередь.
+#
+# Формат:
+#
+# {
+#     "title": "Название трека",
+#     "webpage_url": "https://youtube.com/watch?v=..."
+# }
 
 music_queues = {}
 
 
 # ============================================================
-# Задачи автоматического выхода
-# ============================================================
-
-leave_tasks = {}
-
-
-# ============================================================
-# Текущий трек
+# Текущие треки
 # ============================================================
 
 current_tracks = {}
 
 
 # ============================================================
-# Вывод следующих пяти треков
+# Таймеры выхода из голосового канала
+# ============================================================
+
+leave_tasks = {}
+
+
+# ============================================================
+# Блокировки воспроизведения
+# ============================================================
+
+play_locks = {}
+
+
+# ============================================================
+# Показать следующие 5 треков
 # ============================================================
 
 async def send_queue(
@@ -625,106 +659,157 @@ async def play_next(
     guild_id = guild.id
 
 
-    voice_client = (
-        guild.voice_client
-    )
+    # Создаём блокировку для сервера
+    if guild_id not in play_locks:
+
+        play_locks[
+            guild_id
+        ] = asyncio.Lock()
 
 
-    if voice_client is None:
+    async with play_locks[guild_id]:
 
-        return
-
-
-    queue = music_queues.get(
-        guild_id,
-        []
-    )
+        voice_client = (
+            guild.voice_client
+        )
 
 
-    # Если очередь закончилась
-    if not queue:
+        if voice_client is None:
 
-        current_tracks.pop(
+            return
+
+
+        # Если что-то уже играет,
+        # новый трек не запускаем
+        if (
+            voice_client.is_playing()
+            or voice_client.is_paused()
+        ):
+
+            return
+
+
+        queue = music_queues.get(
             guild_id,
-            None
+            []
         )
 
 
-        await schedule_leave(
-            guild
-        )
+        # Если очередь закончилась
+        if not queue:
 
-
-        return
-
-
-    # Берём первый трек
-    track = queue.pop(0)
-
-
-    current_tracks[
-        guild_id
-    ] = track
-
-
-    # Создаём источник аудио
-    audio_source = (
-        discord.FFmpegPCMAudio(
-            track["url"],
-
-            executable=FFMPEG_PATH,
-
-            **FFMPEG_OPTIONS
-        )
-    )
-
-
-    # Callback после завершения трека
-    def after_playing(error):
-
-        if error:
-
-            print(
-                f"Ошибка воспроизведения: {error}"
+            current_tracks.pop(
+                guild_id,
+                None
             )
 
 
-        asyncio.run_coroutine_threadsafe(
-            play_next(
+            await schedule_leave(
+                guild
+            )
+
+
+            return
+
+
+        # Берём первый трек из очереди
+        track = queue.pop(0)
+
+
+        current_tracks[
+            guild_id
+        ] = track
+
+
+        try:
+
+            # Получаем свежую ссылку
+            # на аудиопоток YouTube
+            audio_url = (
+                await get_stream_url(
+                    track["webpage_url"]
+                )
+            )
+
+
+            # Создаём FFmpeg-аудиоисточник
+            audio_source = (
+                discord.FFmpegPCMAudio(
+                    audio_url,
+
+                    executable=FFMPEG_PATH,
+
+                    **FFMPEG_OPTIONS
+                )
+            )
+
+
+        except Exception as error:
+
+            print(
+                "Не удалось получить аудио "
+                f"для трека "
+                f"{track['title']}: {error}"
+            )
+
+
+            # Если трек не удалось запустить,
+            # пытаемся запустить следующий
+            await play_next(
                 guild,
                 text_channel
-            ),
+            )
 
-            bot.loop
+
+            return
+
+
+        # Callback после окончания трека
+        def after_playing(error):
+
+            if error:
+
+                print(
+                    f"Ошибка воспроизведения: {error}"
+                )
+
+
+            asyncio.run_coroutine_threadsafe(
+                play_next(
+                    guild,
+                    text_channel
+                ),
+
+                bot.loop
+            )
+
+
+        # Запускаем трек
+        voice_client.play(
+            audio_source,
+
+            after=after_playing
         )
 
 
-    # Запускаем воспроизведение
-    voice_client.play(
-        audio_source,
-
-        after=after_playing
-    )
+        # Отменяем таймер выхода
+        cancel_leave_task(
+            guild_id
+        )
 
 
-    # Отменяем таймер выхода
-    cancel_leave_task(
-        guild_id
-    )
+        # Сообщаем о текущем треке
+        await text_channel.send(
+            "▶️ **Сейчас играет:**\n"
+            f"**{track['title']}**"
+        )
 
 
-    # Сообщаем о текущем треке
-    await text_channel.send(
-        "▶️ **Сейчас играет:**\n"
-        f"**{track['title']}**"
-    )
-
-
-    # Показываем очередь
-    await send_queue(
-        guild,
-        text_channel
-    )
+        # Показываем следующие 5 треков
+        await send_queue(
+            guild,
+            text_channel
+        )
 
 
 # ============================================================
@@ -756,6 +841,8 @@ async def leave_after_30_seconds(
         )
 
 
+        # Если за 30 секунд ничего нового
+        # не добавили в очередь
         if (
             not queue
             and voice_client is not None
@@ -896,7 +983,7 @@ async def notorious(
         return
 
 
-    # Проверяем голосовой канал
+    # Проверяем голосовой канал пользователя
     if interaction.user.voice is None:
 
         await interaction.response.send_message(
@@ -930,7 +1017,8 @@ async def notorious(
         )
 
 
-        # Инициализируем очередь
+        # Создаём очередь,
+        # если её ещё нет
         if guild_id not in music_queues:
 
             music_queues[
@@ -938,7 +1026,7 @@ async def notorious(
             ] = []
 
 
-        # Подключаем бота
+        # Подключаем бота к голосовому каналу
         voice_client = (
             interaction.guild.voice_client
         )
@@ -965,7 +1053,7 @@ async def notorious(
 
 
         # ====================================================
-        # Если это плейлист
+        # ПЛЕЙЛИСТ
         # ====================================================
 
         if info.get(
@@ -983,8 +1071,7 @@ async def notorious(
 
             for entry in entries:
 
-                # Некоторые элементы
-                # плейлиста могут быть недоступны
+                # Пропускаем недоступные видео
                 if not entry:
 
                     continue
@@ -995,15 +1082,14 @@ async def notorious(
                 )
 
 
-                video_url = entry.get(
+                webpage_url = entry.get(
                     "webpage_url"
                 )
 
 
-                # Иногда webpage_url отсутствует.
-                # Тогда формируем URL
-                # из video_id
-                if not video_url:
+                # Если URL страницы отсутствует,
+                # формируем его через video_id
+                if not webpage_url:
 
                     video_id = entry.get(
                         "id"
@@ -1012,13 +1098,13 @@ async def notorious(
 
                     if video_id:
 
-                        video_url = (
+                        webpage_url = (
                             "https://www.youtube.com/watch?v="
                             f"{video_id}"
                         )
 
 
-                if not title or not video_url:
+                if not title or not webpage_url:
 
                     continue
 
@@ -1027,7 +1113,7 @@ async def notorious(
 
                     "title": title,
 
-                    "url": video_url,
+                    "webpage_url": webpage_url,
 
                 }
 
@@ -1056,7 +1142,10 @@ async def notorious(
 
             # Если ничего не играет,
             # запускаем первый трек
-            if not voice_client.is_playing():
+            if (
+                not voice_client.is_playing()
+                and not voice_client.is_paused()
+            ):
 
                 await play_next(
                     interaction.guild,
@@ -1065,34 +1154,25 @@ async def notorious(
                 )
 
 
-                # Убираем первый трек
-                # из текста ответа,
-                # потому что он уже запущен
-                started_title = (
-                    added_tracks[0]["title"]
-                )
-
-
                 await interaction.followup.send(
-                    "🎵 Плейлист добавлен.\n"
+                    "🎵 **Плейлист добавлен.**\n"
                     f"Добавлено треков: "
-                    f"**{len(added_tracks)}**\n"
-                    f"▶️ Начинает играть: "
-                    f"**{started_title}**"
+                    f"**{len(added_tracks)}**"
                 )
 
 
             else:
 
                 await interaction.followup.send(
-                    "🎵 Плейлист добавлен в очередь.\n"
+                    "🎵 **Плейлист добавлен "
+                    "в очередь.**\n"
                     f"Добавлено треков: "
                     f"**{len(added_tracks)}**"
                 )
 
 
         # ====================================================
-        # Если это одиночный трек
+        # ОДИНОЧНЫЙ ТРЕК
         # ====================================================
 
         else:
@@ -1103,28 +1183,30 @@ async def notorious(
             )
 
 
-            audio_url = info.get(
+            webpage_url = info.get(
                 "webpage_url"
             )
 
 
-            # Если webpage_url отсутствует,
-            # используем исходный запрос
-            if not audio_url:
+            # Для поискового результата
+            # webpage_url обычно присутствует.
+            #
+            # Это запасной вариант.
+            if not webpage_url:
 
-                audio_url = query
+                webpage_url = query
 
 
             track = {
 
                 "title": title,
 
-                "url": audio_url,
+                "webpage_url": webpage_url,
 
             }
 
 
-            # Добавляем в очередь
+            # Добавляем трек в очередь
             music_queues[
                 guild_id
             ].append(
@@ -1133,8 +1215,11 @@ async def notorious(
 
 
             # Если ничего не играет,
-            # запускаем первый трек
-            if not voice_client.is_playing():
+            # запускаем трек
+            if (
+                not voice_client.is_playing()
+                and not voice_client.is_paused()
+            ):
 
                 await play_next(
                     interaction.guild,
@@ -1153,7 +1238,7 @@ async def notorious(
 
 
                 await interaction.followup.send(
-                    "➕ Трек добавлен в очередь:\n"
+                    "➕ **Трек добавлен в очередь:**\n"
                     f"**{title}**\n"
                     f"Позиция: **{position}**"
                 )
@@ -1216,7 +1301,7 @@ async def sambovanie(
         return
 
 
-    # Пауза
+    # Если играет — ставим на паузу
     if voice_client.is_playing():
 
         voice_client.pause()
@@ -1227,7 +1312,8 @@ async def sambovanie(
         )
 
 
-    # Продолжение
+    # Если стоит на паузе —
+    # продолжаем воспроизведение
     elif voice_client.is_paused():
 
         voice_client.resume()
@@ -1303,8 +1389,9 @@ async def next_track(
 
 
     # Останавливаем текущий трек.
-    # Callback автоматически
-    # запустит следующий.
+    #
+    # Callback after_playing
+    # запустит следующий трек.
     voice_client.stop()
 
 
