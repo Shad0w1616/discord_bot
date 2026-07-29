@@ -1,40 +1,45 @@
-class MusicError(Exception):
+class MusicException(Exception):
     """
-    Базовое исключение музыкального модуля.
-    """
-
-
-class QueueEmptyError(MusicError):
-    """
-    Очередь пуста.
+    Базовое исключение музыкальной системы.
     """
 
-
-class TrackNotFoundError(MusicError):
-    """
-    Трек не найден.
-    """
+    pass
 
 
-class InvalidYoutubeUrlError(MusicError):
-    """
-    Некорректная ссылка YouTube.
-    """
 
 
-class YoutubeSearchError(MusicError):
-    """
-    Ошибка поиска на YouTube.
-    """
 
-
-class AudioStreamError(MusicError):
-    """
-    Не удалось получить аудиопоток.
-    """
-
-
-class VoiceConnectionError(MusicError):
+class VoiceConnectionError(
+    MusicException
+):
     """
     Ошибка подключения к голосовому каналу.
     """
+
+    pass
+
+
+
+
+
+class TrackNotFoundError(
+    MusicException
+):
+    """
+    Трек не найден или недоступен.
+    """
+
+    pass
+
+
+
+
+
+class PlaybackError(
+    MusicException
+):
+    """
+    Ошибка воспроизведения.
+    """
+
+    pass

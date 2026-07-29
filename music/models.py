@@ -4,97 +4,134 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-import discord
 
 
 @dataclass(slots=True)
 class Track:
     """
-    Музыкальный трек.
+    Модель одного музыкального трека.
     """
 
     title: str
 
-    webpage_url: str
+    url: str
 
-    stream_url: Optional[str] = None
+    guild_id: int
 
     duration: Optional[int] = None
 
-    uploader: Optional[str] = None
-
     thumbnail: Optional[str] = None
 
-    requester: Optional[discord.Member] = None
+    requester_id: Optional[int] = None
+
+    requester_name: Optional[str] = None
 
     added_at: datetime = field(
         default_factory=datetime.utcnow
     )
 
-    def __str__(self) -> str:
 
-        return self.title
+
+    @property
+    def duration_formatted(
+        self
+    ) -> str:
+        """
+        Возвращает длительность
+        в формате MM:SS.
+        """
+
+        if self.duration is None:
+
+            return "unknown"
+
+
+
+        minutes = self.duration // 60
+
+        seconds = self.duration % 60
+
+
+        return (
+            f"{minutes}:{seconds:02d}"
+        )
+
+
+
+    def set_requester(
+        self,
+        user
+    ) -> None:
+        """
+        Сохраняет пользователя,
+        который добавил трек.
+        """
+
+        self.requester_id = user.id
+
+
+        self.requester_name = (
+
+            user.display_name
+
+            or user.name
+
+        )
+
+
+
 
 
 @dataclass(slots=True)
 class Playlist:
     """
-    YouTube-плейлист.
+    Модель YouTube плейлиста.
     """
 
     title: str
 
-    tracks: list[Track]
-
-    uploader: Optional[str] = None
-
-    webpage_url: Optional[str] = None
-
-    thumbnail: Optional[str] = None
-
-    def __len__(self) -> int:
-
-        return len(self.tracks)
-
-    def __iter__(self):
-
-        return iter(self.tracks)
-
-
-@dataclass(slots=True)
-class QueueItem:
-    """
-    Элемент очереди.
-    """
-
-    track: Track
-
-    requester: discord.Member
-
-    position: int = 0
-
-
-@dataclass(slots=True)
-class GuildState:
-    """
-    Состояние музыкального проигрывателя
-    для одного Discord-сервера.
-    """
-
-    guild_id: int
-
-    current_track: Optional[Track] = None
-
-    paused: bool = False
-
-    loop: bool = False
-
-    volume: float = 1.0
-
-    last_activity: datetime = field(
-        default_factory=datetime.utcnow
+    tracks: list[Track] = field(
+        default_factory=list
     )
 
-    def touch(self):
 
-        self.last_activity = datetime.utcnow()
+
+    @property
+    def count(
+        self
+    ) -> int:
+        """
+        Количество треков.
+        """
+
+        return len(
+            self.tracks
+        )
+
+
+
+    def add_track(
+        self,
+        track: Track
+    ) -> None:
+        """
+        Добавляет один трек.
+        """
+
+        self.tracks.append(
+            track
+        )
+
+
+
+    def add_tracks(
+        self,
+        tracks: list[Track]
+    ) -> None:
+        """
+        Добавляет список треков.
+        """
+
+        self.tracks.extend(
+            tracks
+        )

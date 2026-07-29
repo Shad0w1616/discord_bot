@@ -1,255 +1,293 @@
 from __future__ import annotations
 
 import asyncio
-import re
-from typing import Optional
+from typing import Any
 
 import yt_dlp
 
-from config import settings
+from music.models import Track, Playlist
+from settings import settings
+from utils.logger import logger
 
-from music.models import (
-    Track,
-    Playlist
-)
-
-from music.exceptions import (
-    InvalidYoutubeUrlError,
-    TrackNotFoundError,
-    YoutubeSearchError,
-    AudioStreamError
-)
 
 
 class YoutubeService:
     """
-    Сервис работы с YouTube.
+    Работа с YouTube через yt-dlp.
 
     Отвечает только за:
-
-    - поиск видео;
     - получение информации о видео;
-    - получение плейлистов;
-    - получение аудиопотоков.
+    - получение информации о плейлистах;
+    - получение прямого audio stream URL.
 
-    Не занимается:
-
-    - очередью;
-    - Discord;
-    - воспроизведением.
+    Воспроизведением занимается MusicPlayer.
     """
 
 
-    YOUTUBE_REGEX = re.compile(
-        r"^(https?://)?"
-        r"(www\.)?"
-        r"(youtube\.com|youtu\.be)/.+$"
-    )
+
+    def __init__(
+        self
+    ):
+
+        self.options = {
+
+            "format": "bestaudio/best",
+
+            "quiet": True,
+
+            "no_warnings": True,
+
+            "skip_download": True,
+
+            "noplaylist": False,
+
+            "ignoreerrors": True,
+
+            "default_search": "ytsearch",
+
+        }
 
 
-    def __init__(self):
 
-        self.options = (
-            settings.YTDLP_OPTIONS.copy()
-        )
+        if settings.YTDLP_COOKIES_PATH:
+
+            self.options[
+                "cookiefile"
+            ] = settings.YTDLP_COOKIES_PATH
+
+
+
 
 
     # =====================================================
-    # Проверка URL
+    # Общий extractor
     # =====================================================
 
-    def is_youtube_url(
-        self,
-        value: str
-    ) -> bool:
-        """
-        Проверяет является ли строка
-        YouTube-ссылкой.
-        """
 
-        return bool(
-            self.YOUTUBE_REGEX.match(
-                value
-            )
-        )
-
-
-    # =====================================================
-    # Выполнение yt-dlp в отдельном потоке
-    # =====================================================
-
-    async def _extract_info(
+    async def extract(
         self,
         query: str
-    ) -> dict:
+    ) -> dict[str, Any] | None:
         """
-        Асинхронная обёртка над yt-dlp.
-
-        yt-dlp синхронный,
-        поэтому запускаем через executor.
+        Запуск yt-dlp в отдельном потоке,
+        чтобы не блокировать Discord event loop.
         """
 
         loop = asyncio.get_running_loop()
 
 
-        try:
+        return await loop.run_in_executor(
 
-            result = await loop.run_in_executor(
+            None,
 
-                None,
+            lambda: self._extract_sync(query)
 
-                self._extract_sync,
-
-                query
-
-            )
-
-            return result
+        )
 
 
-        except Exception as error:
 
-            raise YoutubeSearchError(
-                str(error)
-            )
 
 
     def _extract_sync(
         self,
         query: str
-    ) -> dict:
-        """
-        Синхронный вызов yt-dlp.
-        """
+    ) -> dict[str, Any] | None:
 
 
-        with yt_dlp.YoutubeDL(
-            self.options
-        ) as ydl:
+        try:
 
-            return ydl.extract_info(
-                query,
-                download=False
-            )
+            with yt_dlp.YoutubeDL(
+                self.options
+            ) as ydl:
 
 
-    # =====================================================
-    # Поиск одного трека
-    # =====================================================
+                return ydl.extract_info(
 
-    async def search(
-        self,
-        query: str
-    ) -> Track:
-        """
-        Поиск первого результата
-        на YouTube.
+                    query,
 
-        Пример:
+                    download=False
 
-        "Eminem Lose Yourself"
-
-        превращается в:
-
-        ytsearch1:Eminem Lose Yourself
-        """
-
-
-        if not self.is_youtube_url(
-            query
-        ):
-
-            query = (
-                f"ytsearch1:{query}"
-            )
-
-
-        info = await self._extract_info(
-            query
-        )
-
-
-        # Результат поиска
-        if "entries" in info:
-
-            entries = info.get(
-                "entries"
-            )
-
-
-            if not entries:
-
-                raise TrackNotFoundError(
-                    "Трек не найден."
                 )
 
 
-            info = entries[0]
+        except Exception as error:
 
 
-        return self._convert_track(
-            info
-        )
+            logger.error(
+
+                f"yt-dlp error: {error}"
+
+            )
+
+
+            return None
+
+
+
 
 
     # =====================================================
-    # Получение видео по URL
+    # Один трек
     # =====================================================
+
 
     async def get_track(
         self,
-        url: str
+        query: str,
+        guild_id: int,
+        requester=None
     ) -> Track:
         """
-        Получает информацию
-        об одном видео.
+        Получить один трек.
         """
 
+        info = await self.extract(
+            query
+        )
 
-        if not self.is_youtube_url(
-            url
-        ):
 
-            raise InvalidYoutubeUrlError(
-                "Это не ссылка YouTube."
+        if not info:
+
+            raise RuntimeError(
+                "Видео не найдено"
             )
 
 
-        info = await self._extract_info(
-            url
+
+        # Если ytsearch вернул список
+
+        if info.get(
+            "entries"
+        ):
+
+
+            info = next(
+
+                (
+                    item
+
+                    for item in info["entries"]
+
+                    if item
+
+                ),
+
+                None
+
+            )
+
+
+
+        if not info:
+
+            raise RuntimeError(
+                "Видео недоступно"
+            )
+
+
+
+        webpage_url = (
+
+            info.get(
+                "webpage_url"
+            )
+
+            or info.get(
+                "original_url"
+            )
+
         )
 
 
-        return self._convert_track(
-            info
+
+        if not webpage_url:
+
+            raise RuntimeError(
+                "Не удалось получить URL видео"
+            )
+
+
+
+        track = Track(
+
+            title=info.get(
+
+                "title",
+
+                "Unknown"
+
+            ),
+
+            url=webpage_url,
+
+            guild_id=guild_id,
+
+            duration=info.get(
+                "duration"
+            ),
+
+            thumbnail=info.get(
+                "thumbnail"
+            )
+
         )
 
 
+
+        if requester:
+
+            track.set_requester(
+                requester
+            )
+
+
+
+        return track
+
+
+
+
+
     # =====================================================
-    # Получение плейлиста
+    # Плейлист
     # =====================================================
+
 
     async def get_playlist(
         self,
-        url: str
+        query: str,
+        guild_id: int,
+        requester=None
     ) -> Playlist:
         """
-        Получает YouTube-плейлист.
+        Получение YouTube плейлиста.
         """
 
+        info = await self.extract(
+            query
+        )
 
-        if not self.is_youtube_url(
-            url
-        ):
 
-            raise InvalidYoutubeUrlError(
-                "Плейлист должен быть ссылкой YouTube."
+        if not info:
+
+            raise RuntimeError(
+                "Плейлист недоступен"
             )
 
 
-        info = await self._extract_info(
-            url
+
+        playlist = Playlist(
+
+            title=info.get(
+
+                "title",
+
+                "YouTube playlist"
+
+            )
+
         )
+
 
 
         entries = info.get(
@@ -257,182 +295,155 @@ class YoutubeService:
         )
 
 
+
         if not entries:
 
-            raise TrackNotFoundError(
-                "Плейлист пуст."
-            )
+            return playlist
 
 
-        tracks = []
 
 
-        for entry in entries:
 
-            if not entry:
-
-                continue
+        for item in entries:
 
 
-            try:
+            if (
 
-                track = (
-                    self._convert_track(
-                        entry
-                    )
-                )
+                playlist.count
+
+                >=
+
+                settings.MAX_PLAYLIST_SIZE
+
+            ):
+
+                break
 
 
-                tracks.append(
-                    track
-                )
 
-
-            except Exception:
+            if not item:
 
                 continue
 
 
-        if not tracks:
 
-            raise TrackNotFoundError(
-                "В плейлисте нет доступных треков."
+            url = (
+
+                item.get(
+                    "webpage_url"
+                )
+
+                or item.get(
+                    "original_url"
+                )
+
             )
 
 
-        return Playlist(
 
-            title=info.get(
-                "title",
-                "YouTube Playlist"
-            ),
+            if not url:
 
-            uploader=info.get(
-                "uploader"
-            ),
-
-            webpage_url=info.get(
-                "webpage_url"
-            ),
-
-            thumbnail=info.get(
-                "thumbnail"
-            ),
-
-            tracks=tracks
-        )
+                continue
 
 
-    # =====================================================
-    # Универсальный обработчик
-    # =====================================================
 
-    async def resolve(
-        self,
-        query: str
-    ) -> Track | Playlist:
-        """
-        Определяет что передал пользователь:
+            track = Track(
 
-        - поиск;
-        - видео;
-        - плейлист.
-        """
+                title=item.get(
 
+                    "title",
 
-        # Поисковый запрос
-        if not self.is_youtube_url(
-            query
-        ):
+                    "Unknown"
 
-            return await self.search(
-                query
+                ),
+
+                url=url,
+
+                guild_id=guild_id,
+
+                duration=item.get(
+                    "duration"
+                ),
+
+                thumbnail=item.get(
+                    "thumbnail"
+                )
+
             )
 
 
-        info = await self._extract_info(
-            query
-        )
+
+            if requester:
+
+                track.set_requester(
+                    requester
+                )
 
 
-        if info.get(
-            "_type"
-        ) == "playlist":
 
-            return await self.get_playlist(
-                query
+            playlist.add_track(
+                track
             )
 
 
-        return self._convert_track(
-            info
-        )
+
+        return playlist
+
+
+
 
 
     # =====================================================
-    # Получение прямого аудиопотока
+    # Audio stream
     # =====================================================
+
 
     async def get_stream_url(
-        self,
-        track: Track
-    ) -> str:
-        """
-        Получает временную ссылку
-        аудиопотока для FFmpeg.
-        """
-
-
-        loop = asyncio.get_running_loop()
-
-
-        try:
-
-            url = await loop.run_in_executor(
-
-                None,
-
-                self._get_stream_sync,
-
-                track.webpage_url
-
-            )
-
-
-            return url
-
-
-        except Exception as error:
-
-            raise AudioStreamError(
-                str(error)
-            )
-
-
-    def _get_stream_sync(
         self,
         url: str
     ) -> str:
         """
-        Синхронное получение stream URL.
+        Получение временного audio URL
+        для FFmpeg.
         """
 
+        loop = asyncio.get_running_loop()
 
-        options = {
+
+
+        return await loop.run_in_executor(
+
+            None,
+
+            lambda: self._stream_sync(url)
+
+        )
+
+
+
+
+
+    def _stream_sync(
+        self,
+        url: str
+    ) -> str:
+        """
+        Получение прямого audio stream URL
+        для FFmpeg.
+        """
+
+        options = self.options.copy()
+
+
+        options.update({
 
             "format":
                 "bestaudio/best",
 
-            "quiet":
-                True,
-
-            "no_warnings":
-                True,
-
             "noplaylist":
                 True
 
-        }
+        })
 
 
         with yt_dlp.YoutubeDL(
@@ -441,89 +452,127 @@ class YoutubeService:
 
 
             info = ydl.extract_info(
+
                 url,
 
                 download=False
+
             )
 
 
-            stream = info.get(
+            if not info:
+
+                raise RuntimeError(
+                    "YouTube info отсутствует"
+                )
+
+
+
+            # Иногда yt-dlp возвращает вложенный результат
+
+            if info.get("entries"):
+
+
+                info = next(
+
+                    (
+                        item
+
+                        for item in info["entries"]
+
+                        if item
+
+                    ),
+
+                    None
+
+                )
+
+
+
+            if not info:
+
+                raise RuntimeError(
+                    "Видео не найдено"
+                )
+
+
+
+            # Старый вариант
+
+            if info.get("url"):
+
+                return info["url"]
+
+
+
+            # Новый вариант через formats
+
+            formats = info.get(
+                "formats",
+                []
+            )
+
+
+            audio_formats = [
+
+                f
+
+                for f in formats
+
+                if (
+
+                    f.get("acodec")
+
+                    and
+
+                    f.get("acodec") != "none"
+
+                )
+
+            ]
+
+
+
+            if not audio_formats:
+
+                raise RuntimeError(
+                    "Audio formats отсутствуют"
+                )
+
+
+
+            # Берём лучший audio формат
+
+            best_audio = max(
+
+                audio_formats,
+
+                key=lambda x: (
+
+                    x.get(
+                        "abr"
+                    )
+
+                    or 0
+
+                )
+
+            )
+
+
+            stream_url = best_audio.get(
                 "url"
             )
 
 
-            if not stream:
 
-                raise AudioStreamError(
-                    "Аудиопоток отсутствует."
+            if not stream_url:
+
+                raise RuntimeError(
+                    "Audio URL отсутствует"
                 )
 
 
-            return stream
 
-
-    # =====================================================
-    # Конвертация yt-dlp -> Track
-    # =====================================================
-
-    def _convert_track(
-        self,
-        info: dict
-    ) -> Track:
-        """
-        Превращает ответ yt-dlp
-        в наш объект Track.
-        """
-
-
-        video_url = (
-            info.get(
-                "webpage_url"
-            )
-        )
-
-
-        if not video_url:
-
-            video_id = info.get(
-                "id"
-            )
-
-
-            if video_id:
-
-                video_url = (
-                    "https://youtube.com/watch?v="
-                    f"{video_id}"
-                )
-
-
-        if not video_url:
-
-            raise TrackNotFoundError(
-                "Не удалось получить URL видео."
-            )
-
-
-        return Track(
-
-            title=info.get(
-                "title",
-                "Unknown"
-            ),
-
-            webpage_url=video_url,
-
-            duration=info.get(
-                "duration"
-            ),
-
-            uploader=info.get(
-                "uploader"
-            ),
-
-            thumbnail=info.get(
-                "thumbnail"
-            )
-
-        )
+            return stream_url

@@ -1,306 +1,191 @@
 from __future__ import annotations
 
-from typing import Optional
+import asyncio
+from typing import Dict
 
 import discord
 
 from music.player import MusicPlayer
 
-from music.exceptions import (
-    VoiceConnectionError
-)
-
 from utils.logger import logger
-
 
 
 class VoiceManager:
     """
-    Управление голосовыми соединениями.
+    Управление Discord voice-подключениями.
 
-    Отвечает за:
-
-    - подключение к VoiceChannel;
-    - получение MusicPlayer;
-    - хранение плееров серверов.
-
-    Не отвечает за:
-
-    - музыку;
-    - очередь;
-    - FFmpeg.
+    Один guild_id -> один MusicPlayer.
     """
 
+    def __init__(
+        self,
+        bot
+    ):
 
-    def __init__(self):
+        self.bot = bot
 
-        self.players: dict[int, MusicPlayer] = {}
+        self.players: Dict[
+            int,
+            MusicPlayer
+        ] = {}
 
+    async def connect(
+        self,
+        member: discord.Member,
+        text_channel: discord.TextChannel
+    ) -> MusicPlayer:
+        """
+        Подключает бота к голосовому каналу пользователя
+        и возвращает активный MusicPlayer.
+        """
 
+        if not member.voice or not member.voice.channel:
 
-    # =====================================================
-    # Получение плеера
-    # =====================================================
+            raise RuntimeError(
+                "Пользователь не находится в голосовом канале."
+            )
 
+        guild_id = member.guild.id
+        voice_channel = member.voice.channel
+
+        existing = self.players.get(
+            guild_id
+        )
+
+        if existing:
+
+            if existing.voice_client.is_connected():
+
+                if (
+                    existing.voice_client.channel.id
+                    !=
+                    voice_channel.id
+                ):
+
+                    await existing.voice_client.move_to(
+                        voice_channel
+                    )
+
+                existing.text_channel = text_channel
+
+                return existing
+
+            else:
+
+                self.players.pop(
+                    guild_id,
+                    None
+                )
+
+        try:
+
+            voice_client = await voice_channel.connect(
+                timeout=30.0,
+                reconnect=True
+            )
+
+        except asyncio.TimeoutError as error:
+
+            logger.exception(
+                "Таймаут подключения к голосовому каналу"
+            )
+
+            raise RuntimeError(
+                "Не удалось подключиться к голосовому каналу.\n"
+                "Discord не ответил вовремя.\n"
+                "Проверь права Connect/Speak и настройки голосового канала."
+            ) from error
+
+        except discord.ClientException as error:
+
+            logger.exception(
+                "Ошибка подключения к voice"
+            )
+
+            raise RuntimeError(
+                f"Ошибка подключения:\n{error}"
+            ) from error
+
+        except Exception:
+
+            logger.exception(
+                "Неизвестная ошибка подключения к voice"
+            )
+
+            raise
+
+        player = MusicPlayer(
+            voice_client,
+            text_channel,
+            self.bot.loop
+        )
+
+        self.players[guild_id] = player
+
+        logger.info(
+            f"Voice connected: {voice_channel.name}"
+        )
+
+        return player
 
     def get_player(
         self,
         guild_id: int
-    ) -> Optional[MusicPlayer]:
+    ) -> MusicPlayer | None:
         """
-        Возвращает плеер сервера.
-
-        Если плеер не создан —
-        возвращает None.
+        Получить активный плеер сервера.
         """
-
 
         return self.players.get(
             guild_id
         )
 
-
-
-    def create_player(
-        self,
-        guild_id: int,
-        voice_client: discord.VoiceClient
-    ) -> MusicPlayer:
-        """
-        Создаёт новый MusicPlayer.
-        """
-
-
-        player = MusicPlayer(
-
-            guild_id=guild_id,
-
-            voice_client=voice_client
-
-        )
-
-
-        self.players[guild_id] = player
-
-
-        logger.info(
-
-            f"[{guild_id}] "
-            "Создан новый MusicPlayer."
-
-        )
-
-
-        return player
-
-
-
-    # =====================================================
-    # Подключение
-    # =====================================================
-
-
-    async def connect(
-        self,
-        member: discord.Member
-    ) -> MusicPlayer:
-        """
-        Подключает бота
-        к каналу пользователя.
-
-        Возвращает MusicPlayer.
-        """
-
-
-        if not member.voice:
-
-            raise VoiceConnectionError(
-
-                "Пользователь не находится "
-                "в голосовом канале."
-
-            )
-
-
-
-        channel = member.voice.channel
-
-
-        guild = member.guild
-
-
-
-        existing_player = self.get_player(
-
-            guild.id
-
-        )
-
-
-        # =============================================
-        # Если уже есть соединение
-        # =============================================
-
-
-        if existing_player:
-
-
-            if existing_player.voice_client.channel != channel:
-
-
-                await existing_player.voice_client.move_to(
-
-                    channel
-
-                )
-
-
-            return existing_player
-
-
-
-        # =============================================
-        # Создание подключения
-        # =============================================
-
-
-        try:
-
-
-            voice_client = await channel.connect()
-
-
-
-        except Exception as error:
-
-
-            logger.exception(
-
-                "Ошибка подключения Discord voice."
-
-            )
-
-
-            raise VoiceConnectionError(
-
-                str(error)
-
-            )
-
-
-
-        player = self.create_player(
-
-            guild_id=guild.id,
-
-            voice_client=voice_client
-
-        )
-
-
-
-        return player
-
-
-
-    # =====================================================
-    # Отключение
-    # =====================================================
-
-
     async def disconnect(
         self,
         guild_id: int
-    ):
+    ) -> None:
         """
-        Полностью отключает бота
+        Полностью отключить бота
         от голосового канала.
         """
 
-
         player = self.players.get(
-
             guild_id
-
         )
-
 
         if not player:
-
             return
 
+        try:
 
+            await player.shutdown()
 
-        await player.disconnect()
+        except Exception:
 
+            logger.exception(
+                "Ошибка shutdown player"
+            )
 
+        finally:
 
-        del self.players[guild_id]
-
-
-
-        logger.info(
-
-            f"[{guild_id}] "
-            "MusicPlayer удалён."
-
-        )
-
-
-
-    # =====================================================
-    # Проверка состояния
-    # =====================================================
-
-
-    def has_player(
-        self,
-        guild_id: int
-    ) -> bool:
-        """
-        Есть ли активный плеер.
-        """
-
-
-        return guild_id in self.players
-
-
-
-    def get_active_players(
-        self
-    ) -> list[MusicPlayer]:
-        """
-        Все активные плееры.
-        """
-
-
-        return list(
-
-            self.players.values()
-
-        )
-
-
+            self.players.pop(
+                guild_id,
+                None
+            )
 
     async def shutdown(
         self
-    ):
+    ) -> None:
         """
-        Корректное завершение работы.
-
-        Отключает всех ботов
-        от голосовых каналов.
+        Завершение всех voice-соединений.
         """
 
-
-        for guild_id in list(
-
+        guilds = list(
             self.players.keys()
+        )
 
-        ):
+        for guild_id in guilds:
 
             await self.disconnect(
-
                 guild_id
-
             )

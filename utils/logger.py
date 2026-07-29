@@ -1,71 +1,88 @@
+from __future__ import annotations
+
 import logging
-from logging.handlers import RotatingFileHandler
-from pathlib import Path
+import sys
 
-from config import settings
+from settings import settings
 
-
-LOGGER_NAME = "notorious_bot"
 
 
 def setup_logger() -> logging.Logger:
     """
-    Создает и настраивает логгер проекта.
+    Настройка логирования.
 
-    Логи пишутся одновременно:
-        • в консоль
-        • в файл logs/bot.log
+    В Docker контейнере логи должны идти
+    в stdout/stderr, чтобы Docker engine
+    мог их собирать.
     """
 
-    logger = logging.getLogger(LOGGER_NAME)
+
+
+    logger = logging.getLogger(
+        "notorious"
+    )
+
+
 
     if logger.handlers:
+
         return logger
 
-    logger.setLevel(settings.LOG_LEVEL)
 
-    log_directory = Path(settings.LOG_DIRECTORY)
-    log_directory.mkdir(
-        exist_ok=True
+
+    level = getattr(
+
+        logging,
+
+        settings.LOG_LEVEL.upper(),
+
+        logging.INFO
+
     )
+
+
+
+    logger.setLevel(
+        level
+    )
+
+
+
+    handler = logging.StreamHandler(
+        sys.stdout
+    )
+
+
 
     formatter = logging.Formatter(
-        fmt=(
-            "%(asctime)s | "
-            "%(levelname)-8s | "
-            "%(name)s | "
-            "%(message)s"
-        ),
-        datefmt="%d.%m.%Y %H:%M:%S"
+
+        "%(asctime)s | "
+        "%(levelname)s | "
+        "%(name)s | "
+        "%(message)s"
+
     )
 
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(
+
+
+    handler.setFormatter(
         formatter
     )
 
-    file_handler = RotatingFileHandler(
-        log_directory / "bot.log",
-        encoding="utf-8",
-        maxBytes=5 * 1024 * 1024,
-        backupCount=5
-    )
-
-    file_handler.setFormatter(
-        formatter
-    )
 
     logger.addHandler(
-        console_handler
+        handler
     )
 
-    logger.addHandler(
-        file_handler
-    )
 
     logger.propagate = False
 
+
+
     return logger
+
+
+
 
 
 logger = setup_logger()

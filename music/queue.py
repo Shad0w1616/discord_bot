@@ -3,307 +3,96 @@ from __future__ import annotations
 from collections import deque
 from typing import Optional
 
-from music.models import (
-    Track,
-    Playlist,
-    QueueItem
-)
+from music.models import Track
 
-from music.exceptions import (
-    QueueEmptyError
-)
 
 
 class MusicQueue:
     """
-    Менеджер очереди треков.
+    Потокобезопасная логика очереди треков.
 
-    Не знает ничего о:
-    - Discord
-    - FFmpeg
-    - YouTube
-
-    Отвечает только за порядок треков.
+    Очередь принадлежит одному MusicPlayer
+    конкретного Discord сервера.
     """
 
 
-    def __init__(self):
 
-        self._queue: deque[QueueItem] = deque()
+    def __init__(
+        self
+    ):
 
-        self.current: Optional[Track] = None
+        self._items: deque[Track] = deque()
 
-        self.loop: bool = False
 
 
     # =====================================================
-    # Добавление треков
+    # Добавление
     # =====================================================
+
 
     def add(
         self,
         track: Track
-    ) -> QueueItem:
+    ) -> None:
         """
-        Добавляет один трек в очередь.
+        Добавить один трек.
         """
 
-
-        item = QueueItem(
-
-            track=track,
-
-            requester=track.requester,
-
-            position=len(self._queue) + 1
-
+        self._items.append(
+            track
         )
 
 
-        self._queue.append(
-            item
-        )
 
-
-        self._update_positions()
-
-
-        return item
-
-
-
-    def add_playlist(
+    def add_many(
         self,
-        playlist: Playlist
-    ) -> int:
+        tracks: list[Track]
+    ) -> None:
         """
-        Добавляет весь плейлист.
-
-        Возвращает количество
-        добавленных треков.
+        Добавить несколько треков.
         """
 
-
-        count = 0
-
-
-        for track in playlist:
-
-            self.add(
-                track
-            )
-
-            count += 1
-
-
-        return count
+        self._items.extend(
+            tracks
+        )
 
 
 
     # =====================================================
-    # Получение следующего трека
+    # Получение
     # =====================================================
 
-    def next(self) -> Track:
+
+    def get_next(
+        self
+    ) -> Optional[Track]:
         """
-        Забирает следующий трек
-        из очереди.
+        Забрать следующий трек из очереди.
         """
 
+        if self.empty():
 
-        if not self._queue:
-
-            raise QueueEmptyError(
-                "Очередь пуста."
-            )
+            return None
 
 
-        item = self._queue.popleft()
-
-
-        self.current = item.track
-
-
-        self._update_positions()
-
-
-        return item.track
+        return self._items.popleft()
 
 
 
     def peek(
-        self,
-        amount: int = 5
-    ) -> list[Track]:
+        self
+    ) -> Optional[Track]:
         """
-        Возвращает первые N треков
+        Посмотреть следующий трек
         без удаления.
         """
 
+        if self.empty():
 
-        items = list(
-            self._queue
-        )
+            return None
 
 
-        return [
-
-            item.track
-
-            for item in items[:amount]
-
-        ]
-
-
-
-    # =====================================================
-    # Управление очередью
-    # =====================================================
-
-    def clear(self):
-        """
-        Полностью очищает очередь.
-        """
-
-
-        self._queue.clear()
-
-
-        self._update_positions()
-
-
-
-    def remove(
-        self,
-        index: int
-    ) -> Track:
-        """
-        Удаляет трек по номеру.
-
-        Индекс начинается с 1.
-        """
-
-
-        if index < 1:
-
-            raise IndexError(
-                "Индекс должен начинаться с 1."
-            )
-
-
-        if index > len(self._queue):
-
-            raise IndexError(
-                "Такого трека нет."
-            )
-
-
-        items = list(
-            self._queue
-        )
-
-
-        removed = items.pop(
-            index - 1
-        )
-
-
-        self._queue = deque(
-            items
-        )
-
-
-        self._update_positions()
-
-
-        return removed.track
-
-
-
-    def shuffle(self):
-        """
-        Перемешивает очередь.
-        """
-
-
-        import random
-
-
-        items = list(
-            self._queue
-        )
-
-
-        random.shuffle(
-            items
-        )
-
-
-        self._queue = deque(
-            items
-        )
-
-
-        self._update_positions()
-
-
-
-    # =====================================================
-    # Loop
-    # =====================================================
-
-    def enable_loop(self):
-
-        self.loop = True
-
-
-
-    def disable_loop(self):
-
-        self.loop = False
-
-
-
-    def toggle_loop(self) -> bool:
-        """
-        Включает/выключает повтор.
-
-        Возвращает новое состояние.
-        """
-
-
-        self.loop = not self.loop
-
-
-        return self.loop
-
-
-
-    def repeat_current(
-        self
-    ):
-        """
-        Добавляет текущий трек
-        обратно в начало очереди.
-        """
-
-
-        if self.current:
-
-            self._queue.appendleft(
-
-                QueueItem(
-
-                    track=self.current,
-
-                    requester=self.current.requester
-
-                )
-
-            )
-
-
-            self._update_positions()
+        return self._items[0]
 
 
 
@@ -311,82 +100,70 @@ class MusicQueue:
     # Информация
     # =====================================================
 
-    def get_all(
+
+    def preview(
+        self,
+        limit: int = 5
+    ) -> list[Track]:
+        """
+        Вернуть первые N треков.
+        """
+
+        return list(
+            self._items
+        )[:limit]
+
+
+
+    def all(
         self
     ) -> list[Track]:
         """
-        Возвращает всю очередь.
+        Вернуть копию всей очереди.
         """
 
-
-        return [
-
-            item.track
-
-            for item in self._queue
-
-        ]
-
-
-
-    def is_empty(
-        self
-    ) -> bool:
-        """
-        Проверка пустоты очереди.
-        """
-
-
-        return len(self._queue) == 0
+        return list(
+            self._items
+        )
 
 
 
     def size(
         self
     ) -> int:
+        """
+        Количество элементов.
+        """
 
         return len(
-            self._queue
+            self._items
         )
 
 
 
-    # =====================================================
-    # Внутренние методы
-    # =====================================================
-
-    def _update_positions(
-        self
-    ):
-        """
-        Обновляет номера треков.
-        """
-
-
-        for index, item in enumerate(
-
-            self._queue,
-
-            start=1
-
-        ):
-
-            item.position = index
-
-
-
-    def __len__(
-        self
-    ) -> int:
-
-        return len(
-            self._queue
-        )
-
-
-
-    def __bool__(
+    def empty(
         self
     ) -> bool:
+        """
+        Проверка пустой очереди.
+        """
 
-        return not self.is_empty()
+        return not bool(
+            self._items
+        )
+
+
+
+    # =====================================================
+    # Очистка
+    # =====================================================
+
+
+    def clear(
+        self
+    ) -> None:
+        """
+        Полностью очистить очередь.
+        """
+
+        self._items.clear()
