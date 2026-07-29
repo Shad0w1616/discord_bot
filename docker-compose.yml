@@ -1,0 +1,40 @@
+services:
+
+  notorious-bot:
+
+    build:
+      context: .
+
+      dockerfile: Dockerfile
+
+
+    container_name: notorious-bot
+
+
+    restart: unless-stopped
+
+
+    env_file:
+      - .env
+
+
+    volumes:
+
+      # чтобы кэш yt-dlp сохранялся
+      - yt_cache:/tmp/yt-dlp
+
+
+    environment:
+
+      PYTHONUNBUFFERED: "1"
+
+
+    stdin_open: true
+
+    tty: true
+
+
+
+volumes:
+
+  yt_cache:
