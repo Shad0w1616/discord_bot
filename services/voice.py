@@ -80,8 +80,10 @@ class VoiceManager:
         try:
 
             voice_client = await voice_channel.connect(
-                timeout=30.0,
-                reconnect=True
+                timeout=70.0,
+                reconnect=True,
+                self_deaf=True,
+                self_mute=False
             )
 
         except asyncio.TimeoutError as error:

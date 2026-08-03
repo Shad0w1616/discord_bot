@@ -10,14 +10,18 @@ from settings import settings
 from services.voice import VoiceManager
 
 from utils.logger import logger
+
 def check_opus():
 
     if discord.opus.is_loaded():
         return
 
 
+    # discord.opus.load_opus(
+    #     r"C:\vsyach\opus\libopus-0.x64.dll"
+    # )
     discord.opus.load_opus(
-        r"C:\vsyach\opus\libopus-0.x64.dll"
+        "libopus.so.0"
     )
 
 
