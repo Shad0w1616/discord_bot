@@ -1,15 +1,11 @@
 services:
-
   notorious-bot:
 
     build:
       context: .
-
       dockerfile: Dockerfile
 
-
     container_name: notorious-bot
-
 
     restart: unless-stopped
 
@@ -18,26 +14,29 @@ services:
     env_file:
       - .env
 
-
     volumes:
-
-      # чтобы кэш yt-dlp сохранялся
       - yt_cache:/tmp/yt-dlp
       - ./cookies.txt:/app/cookies.txt
 
-
     environment:
       YTDLP_COOKIES_PATH: /app/cookies.txt
-
       PYTHONUNBUFFERED: "1"
 
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
     stdin_open: true
-
     tty: true
 
-
-
 volumes:
-
   yt_cache:
