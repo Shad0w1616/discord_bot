@@ -34,7 +34,7 @@ class MusicCommands(commands.Cog):
 
 
     @app_commands.command(
-        name="notorious",
+        name="play",
         description="Добавить трек или плейлист"
     )
     async def notorious(
@@ -200,7 +200,7 @@ class MusicCommands(commands.Cog):
 
             logger.exception(
 
-                "Ошибка /notorious"
+                "Ошибка /игрун"
 
             )
 
@@ -220,7 +220,7 @@ class MusicCommands(commands.Cog):
 
 
     @app_commands.command(
-        name="sambovanie",
+        name="pause",
         description="Пауза или продолжение музыки"
     )
     async def sambovanie(
