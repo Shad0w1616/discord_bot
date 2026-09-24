@@ -22,6 +22,7 @@ services:
     environment:
       YTDLP_COOKIES_PATH: /app/cookies.txt
       QUEUE_STATE_PATH: /app/data/queues.json
+      DAILY_VICTIMS_STATE_PATH: /app/data/daily_victims.json
       PYTHONUNBUFFERED: "1"
 
     healthcheck:

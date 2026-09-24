@@ -301,6 +301,10 @@ class Settings:
         os.getenv("QUEUE_STATE_PATH", "data/queues.json")
     )
 
+    DAILY_VICTIMS_STATE_PATH: Path = Path(
+        os.getenv("DAILY_VICTIMS_STATE_PATH", "data/daily_victims.json")
+    )
+
 
 
 
