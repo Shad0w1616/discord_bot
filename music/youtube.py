@@ -660,6 +660,26 @@ class YoutubeService:
 
         self._setup_cookies()
 
+    @staticmethod
+    def _get_webpage_url(info: dict[str, Any]) -> str | None:
+        """Возвращает страницу видео и поддерживает плоские записи yt-dlp."""
+        webpage_url = info.get("webpage_url") or info.get("original_url")
+        if isinstance(webpage_url, str) and webpage_url:
+            return webpage_url
+
+        raw_url = info.get("url")
+        if isinstance(raw_url, str):
+            if raw_url.startswith(("http://", "https://")):
+                return raw_url
+            if raw_url.startswith("//"):
+                return f"https:{raw_url}"
+
+        video_id = info.get("id") or raw_url
+        if isinstance(video_id, str) and video_id:
+            return f"https://www.youtube.com/watch?v={video_id}"
+
+        return None
+
 
 
     # =====================================================
@@ -795,17 +815,7 @@ class YoutubeService:
             )
 
 
-        webpage_url = (
-
-            info.get(
-                "webpage_url"
-            )
-
-            or info.get(
-                "original_url"
-            )
-
-        )
+        webpage_url = self._get_webpage_url(info)
 
 
         if not webpage_url:
@@ -912,17 +922,7 @@ class YoutubeService:
                 continue
 
 
-            url = (
-
-                item.get(
-                    "webpage_url"
-                )
-
-                or item.get(
-                    "original_url"
-                )
-
-            )
+            url = self._get_webpage_url(item)
 
 
             if not url:
