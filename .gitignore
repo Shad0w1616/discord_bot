@@ -74,3 +74,6 @@ dist/
 .coverage
 
 htmlcov/
+
+# Runtime queue state
+data/

@@ -1,193 +1,91 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Dict
 
 import discord
 
 from music.player import MusicPlayer
-
+from music.storage import QueueStorage
+from settings import settings
 from utils.logger import logger
 
 
 class VoiceManager:
-    """
-    Управление Discord voice-подключениями.
+    """Управляет одним голосовым плеером на Discord-сервер."""
 
-    Один guild_id -> один MusicPlayer.
-    """
-
-    def __init__(
-        self,
-        bot
-    ):
-
+    def __init__(self, bot) -> None:
         self.bot = bot
-
-        self.players: Dict[
-            int,
-            MusicPlayer
-        ] = {}
+        self.players: dict[int, MusicPlayer] = {}
+        self.storage = QueueStorage(settings.QUEUE_STATE_PATH)
 
     async def connect(
         self,
         member: discord.Member,
-        text_channel: discord.TextChannel
+        text_channel: discord.TextChannel,
     ) -> MusicPlayer:
-        """
-        Подключает бота к голосовому каналу пользователя
-        и возвращает активный MusicPlayer.
-        """
-
         if not member.voice or not member.voice.channel:
-
-            raise RuntimeError(
-                "Пользователь не находится в голосовом канале."
-            )
+            raise RuntimeError("Сначала зайдите в голосовой канал.")
 
         guild_id = member.guild.id
         voice_channel = member.voice.channel
-
-        existing = self.players.get(
-            guild_id
-        )
-
+        existing = self.players.get(guild_id)
+        if existing and existing.voice_client.is_connected():
+            if existing.voice_client.channel.id != voice_channel.id:
+                raise RuntimeError("Бот уже играет в другом голосовом канале.")
+            existing.text_channel = text_channel
+            return existing
         if existing:
-
-            if existing.voice_client.is_connected():
-
-                if (
-                    existing.voice_client.channel.id
-                    !=
-                    voice_channel.id
-                ):
-
-                    await existing.voice_client.move_to(
-                        voice_channel
-                    )
-
-                existing.text_channel = text_channel
-
-                return existing
-
-            else:
-
-                self.players.pop(
-                    guild_id,
-                    None
-                )
+            self.players.pop(guild_id, None)
 
         try:
-
             voice_client = await voice_channel.connect(
                 timeout=70.0,
                 reconnect=True,
                 self_deaf=True,
-                self_mute=False
+                self_mute=False,
             )
-
         except asyncio.TimeoutError as error:
-
-            logger.exception(
-                "Таймаут подключения к голосовому каналу"
-            )
-
             raise RuntimeError(
-                "Не удалось подключиться к голосовому каналу.\n"
-                "Discord не ответил вовремя.\n"
-                "Проверь права Connect/Speak и настройки голосового канала."
+                "Discord не ответил вовремя. Проверьте права Connect и Speak."
             ) from error
-
         except discord.ClientException as error:
-
-            logger.exception(
-                "Ошибка подключения к voice"
-            )
-
-            raise RuntimeError(
-                f"Ошибка подключения:\n{error}"
-            ) from error
-
-        except Exception:
-
-            logger.exception(
-                "Неизвестная ошибка подключения к voice"
-            )
-
-            raise
+            raise RuntimeError(f"Ошибка подключения: {error}") from error
 
         player = MusicPlayer(
             voice_client,
             text_channel,
-            self.bot.loop
+            self.bot.loop,
+            self.storage,
         )
-
         self.players[guild_id] = player
-
-        logger.info(
-            f"Voice connected: {voice_channel.name}"
-        )
-
+        restored = await player.restore()
+        if restored:
+            logger.info("Восстановлено треков guild=%s: %s", guild_id, restored)
+            asyncio.create_task(player.play_next())
+        logger.info("Voice connected: %s", voice_channel.name)
         return player
 
-    def get_player(
-        self,
-        guild_id: int
-    ) -> MusicPlayer | None:
-        """
-        Получить активный плеер сервера.
-        """
+    def get_player(self, guild_id: int) -> MusicPlayer | None:
+        return self.players.get(guild_id)
 
-        return self.players.get(
-            guild_id
-        )
-
-    async def disconnect(
-        self,
-        guild_id: int
-    ) -> None:
-        """
-        Полностью отключить бота
-        от голосового канала.
-        """
-
-        player = self.players.get(
-            guild_id
-        )
-
+    async def disconnect(self, guild_id: int) -> None:
+        player = self.players.get(guild_id)
         if not player:
             return
-
         try:
-
             await player.shutdown()
-
         except Exception:
-
-            logger.exception(
-                "Ошибка shutdown player"
-            )
-
+            logger.exception("Ошибка shutdown player")
         finally:
+            self.players.pop(guild_id, None)
 
-            self.players.pop(
-                guild_id,
-                None
-            )
-
-    async def shutdown(
-        self
-    ) -> None:
-        """
-        Завершение всех voice-соединений.
-        """
-
-        guilds = list(
-            self.players.keys()
-        )
-
+    async def shutdown(self) -> None:
+        guilds = list(self.players)
         for guild_id in guilds:
-
-            await self.disconnect(
-                guild_id
-            )
+            player = self.players[guild_id]
+            try:
+                await player.shutdown(preserve_queue=True)
+            except Exception:
+                logger.exception("Ошибка сохранения player guild=%s", guild_id)
+            finally:
+                self.players.pop(guild_id, None)

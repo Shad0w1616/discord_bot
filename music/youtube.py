@@ -589,6 +589,10 @@ from music.models import Track, Playlist
 from settings import settings
 from utils.logger import logger
 
+_EXTRACTION_SEMAPHORE = asyncio.Semaphore(
+    settings.MAX_CONCURRENT_EXTRACTIONS
+)
+
 
 class YoutubeService:
     """
@@ -620,6 +624,12 @@ class YoutubeService:
 
             "noplaylist":
                 False,
+
+            "playlistend":
+                settings.MAX_PLAYLIST_SIZE,
+
+            "extract_flat":
+                "in_playlist",
 
             "ignoreerrors":
                 False,
@@ -694,33 +704,38 @@ class YoutubeService:
 
     async def extract(
         self,
-        query: str
+        query: str,
+        playlist_limit: int | None = None
     ) -> dict[str, Any] | None:
 
         loop = asyncio.get_running_loop()
 
 
-        return await loop.run_in_executor(
-            None,
-            lambda: self._extract_sync(
-                f"ytsearch1:{query}"
-                if not query.startswith("http")
-                else query
+        async with _EXTRACTION_SEMAPHORE:
+            return await loop.run_in_executor(
+                None,
+                lambda: self._extract_sync(
+                    f"ytsearch1:{query}"
+                    if not query.startswith("http")
+                    else query,
+                    playlist_limit
+                )
             )
-        )
 
 
 
     def _extract_sync(
         self,
-        query: str
+        query: str,
+        playlist_limit: int | None = None
     ) -> dict[str, Any] | None:
 
         try:
 
-            with yt_dlp.YoutubeDL(
-                self.options
-            ) as ydl:
+            options = self.options.copy()
+            if playlist_limit is not None:
+                options["playlistend"] = max(1, playlist_limit)
+            with yt_dlp.YoutubeDL(options) as ydl:
 
                 return ydl.extract_info(
                     query,
@@ -841,11 +856,13 @@ class YoutubeService:
         self,
         query: str,
         guild_id: int,
-        requester=None
+        requester=None,
+        max_items: int | None = None
     ) -> Playlist:
 
         info = await self.extract(
-            query
+            query,
+            playlist_limit=max_items
         )
 
 
@@ -880,7 +897,12 @@ class YoutubeService:
         for item in entries:
 
 
-            if playlist.count >= settings.MAX_PLAYLIST_SIZE:
+            limit = min(
+                settings.MAX_PLAYLIST_SIZE,
+                max_items if max_items is not None else settings.MAX_PLAYLIST_SIZE
+            )
+
+            if playlist.count >= limit:
 
                 break
 
@@ -959,10 +981,11 @@ class YoutubeService:
         loop = asyncio.get_running_loop()
 
 
-        return await loop.run_in_executor(
-            None,
-            lambda: self._stream_sync(url)
-        )
+        async with _EXTRACTION_SEMAPHORE:
+            return await loop.run_in_executor(
+                None,
+                lambda: self._stream_sync(url)
+            )
 
 
 

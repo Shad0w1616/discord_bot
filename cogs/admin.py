@@ -182,7 +182,7 @@ class AdminCommands(commands.Cog):
 
 
 
-        player.queue.clear()
+        await player.clear_queue()
 
 
 

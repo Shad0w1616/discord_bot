@@ -206,9 +206,6 @@ class Settings:
 
 
 
-    # =====================================================
-    # FFmpeg
-    # =====================================================
 
 
     FFMPEG_PATH: str = os.getenv(
@@ -286,6 +283,22 @@ class Settings:
             "100"
         )
 
+    )
+
+    MAX_QUEUE_SIZE: int = int(
+        os.getenv("MAX_QUEUE_SIZE", "200")
+    )
+
+    PLAY_COOLDOWN_SECONDS: float = float(
+        os.getenv("PLAY_COOLDOWN_SECONDS", "5")
+    )
+
+    MAX_CONCURRENT_EXTRACTIONS: int = int(
+        os.getenv("MAX_CONCURRENT_EXTRACTIONS", "2")
+    )
+
+    QUEUE_STATE_PATH: Path = Path(
+        os.getenv("QUEUE_STATE_PATH", "data/queues.json")
     )
 
 
