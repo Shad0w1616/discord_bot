@@ -115,13 +115,31 @@ class DailyVictims(commands.Cog):
     async def cog_unload(self) -> None:
         self.daily_check.cancel()
 
+    # async def _eligible_members(self, guild: discord.Guild) -> list[discord.Member]:
+    #     if not guild.chunked:
+    #         try:
+    #             await guild.chunk(cache=True)
+    #         except (discord.HTTPException, discord.ClientException):
+    #             logger.exception("Не удалось загрузить участников guild=%s", guild.id)
+    #     return [member for member in guild.members if not member.bot]
     async def _eligible_members(self, guild: discord.Guild) -> list[discord.Member]:
         if not guild.chunked:
             try:
                 await guild.chunk(cache=True)
             except (discord.HTTPException, discord.ClientException):
                 logger.exception("Не удалось загрузить участников guild=%s", guild.id)
-        return [member for member in guild.members if not member.bot]
+
+        excluded_roles = {"водонос", "прислуга"}
+
+        return [
+            member
+            for member in guild.members
+            if not member.bot
+            and not any(
+                role.name.casefold() in excluded_roles
+                for role in member.roles
+            )
+        ]
 
     async def _send_rubric(
         self,
