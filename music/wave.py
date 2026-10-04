@@ -11,6 +11,7 @@ class WaveSession:
     seed: Track
     limit: int
     completed: int = 0
+    completed_urls: set[str] = field(default_factory=set)
     failures: int = 0
     pending: deque[Track] = field(default_factory=deque)
     seen: set[str] = field(default_factory=set)

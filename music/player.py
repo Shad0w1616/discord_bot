@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from typing import Optional
 
 import discord
@@ -10,6 +11,7 @@ from music.queue import MusicQueue
 from music.storage import QueueStorage
 from music.youtube import YoutubeService
 from music.wave import WaveSession
+from music.controls import PlayerControls
 from settings import settings
 from utils.embeds import error_embed, now_playing_embed
 from utils.logger import logger
@@ -41,6 +43,59 @@ class MusicPlayer:
         self.wave: WaveSession | None = None
         self._wave_loading = False
         self._epoch = 0
+        self.history: deque[Track] = deque(maxlen=100)
+        self.panel_view: PlayerControls | None = None
+        self.panel_message: discord.Message | None = None
+        self._panel_lock = asyncio.Lock()
+
+    def panel_embed(self) -> discord.Embed:
+        embed = now_playing_embed(self.current)
+        state = "Пауза" if self.voice_client.is_paused() else "Сейчас играет"
+        embed.title = state
+        mode = f"Волна • доиграно {self.wave.completed}/{self.wave.limit}" if self.wave else "Обычная очередь"
+        embed.set_footer(text=f"{mode} • Повтор: {'вкл' if self.repeat_enabled else 'выкл'}")
+        return embed
+
+    async def close_panel(self) -> None:
+        async with self._panel_lock:
+            view, message = self.panel_view, self.panel_message
+            self.panel_view = self.panel_message = None
+            if view is None:
+                return
+            view.active = False
+            for item in view.children:
+                item.disabled = True
+            view.stop()
+            if message is not None:
+                try:
+                    await message.edit(view=view)
+                except discord.HTTPException:
+                    logger.warning("Не удалось отключить старую панель")
+
+    async def show_panel(self) -> None:
+        await self.close_panel()
+        async with self._panel_lock:
+            if self.current is None or self._shutting_down:
+                return
+            view = PlayerControls(self)
+            self.panel_view = view
+            try:
+                self.panel_message = await self.text_channel.send(embed=self.panel_embed(), view=view)
+            except discord.HTTPException:
+                view.active = False
+                view.stop()
+                self.panel_view = None
+                logger.warning("Не удалось отправить панель текущего трека")
+
+    async def refresh_panel(self) -> None:
+        async with self._panel_lock:
+            if self.panel_view is None or self.panel_message is None or self.current is None:
+                return
+            self.panel_view.sync_buttons()
+            try:
+                await self.panel_message.edit(embed=self.panel_embed(), view=self.panel_view)
+            except discord.HTTPException:
+                logger.warning("Не удалось обновить панель текущего трека")
 
     @property
     def wave_active(self) -> bool:
@@ -81,6 +136,7 @@ class MusicPlayer:
             if epoch != self._epoch or self._shutting_down:
                 raise RuntimeError("Запуск волны отменён.")
             self.wave = wave
+            self.history.clear()
             self.repeat_enabled = False
             asyncio.create_task(self.play_next())
             return seed
@@ -98,7 +154,10 @@ class MusicPlayer:
         self.wave = None
         self.current = None
         self._skip_requested = False
+        self.repeat_enabled = False
+        self.history.clear()
         self.voice_client.stop()
+        await self.close_panel()
         await self.start_disconnect_timer()
         return True
 
@@ -123,6 +182,7 @@ class MusicPlayer:
         self.cancel_disconnect_timer()
         if self.current is None:
             asyncio.create_task(self.play_next())
+        await self.refresh_panel()
 
     async def enqueue_many(self, tracks: list[Track]) -> int:
         self.require_normal_mode()
@@ -135,6 +195,7 @@ class MusicPlayer:
         self.cancel_disconnect_timer()
         if self.current is None:
             asyncio.create_task(self.play_next())
+        await self.refresh_panel()
         return len(accepted)
 
     async def play_next(self) -> None:
@@ -156,6 +217,8 @@ class MusicPlayer:
                     return
                 if track is None:
                     self.wave = None
+                    self.repeat_enabled = False
+                    self.history.clear()
                     await self._notify(
                         f"Волна завершена: {wave.completed}/{wave.limit} треков."
                         + (" YouTube не предоставил новых доступных рекомендаций."
@@ -194,6 +257,8 @@ class MusicPlayer:
                     wave.failures += 1
                     if wave.failures >= 10:
                         self.wave = None
+                        self.repeat_enabled = False
+                        self.history.clear()
                         await self._notify("Волна остановлена после 10 ошибок подряд. Проверьте доступ к YouTube.")
                 await self._persist()
                 try:
@@ -205,10 +270,7 @@ class MusicPlayer:
                 asyncio.create_task(self.play_next())
                 return
 
-            try:
-                await self.text_channel.send(embed=now_playing_embed(track))
-            except discord.HTTPException:
-                logger.warning("Не удалось отправить сообщение о текущем треке")
+            await self.show_panel()
 
     def after_track(self, error, epoch=None) -> None:
         if error:
@@ -222,19 +284,54 @@ class MusicPlayer:
                 return
             finished = self.current
             self.current = None
+            repeat = bool(finished and self.repeat_enabled and not self._skip_requested and not error)
             if self.wave and finished:
                 if error:
                     self.wave.failures += 1
                     if self.wave.failures >= 10:
                         self.wave = None
+                        self.repeat_enabled = False
+                        self.history.clear()
                         await self._notify("Волна остановлена после 10 ошибок воспроизведения подряд.")
                 elif not self._skip_requested:
-                    self.wave.completed += 1
+                    if finished.url not in self.wave.completed_urls:
+                        self.wave.completed_urls.add(finished.url)
+                        self.wave.completed += 1
                     self.wave.failures = 0
-            elif finished and self.repeat_enabled and not self._skip_requested:
+                if repeat and self.wave and self.wave.completed < self.wave.limit:
+                    self.wave.pending.appendleft(finished)
+            elif repeat:
                 self.queue.add_first(finished)
+            if finished and not error and not repeat:
+                self.history.append(finished)
             self._skip_requested = False
             await self._persist()
+            await self.close_panel()
+        asyncio.create_task(self.play_next())
+
+    async def previous(self) -> None:
+        async with self.play_lock:
+            if (self.current is None or self._shutting_down
+                    or not (self.voice_client.is_playing() or self.voice_client.is_paused())):
+                raise RuntimeError("Дождитесь начала воспроизведения.")
+            if not self.history:
+                raise RuntimeError("Предыдущего трека пока нет.")
+            if not self.wave and self.queue.size() + 2 > settings.MAX_QUEUE_SIZE:
+                raise RuntimeError("Для возврата освободите два места в очереди.")
+            previous = self.history.pop()
+            current = self.current
+            self._epoch += 1
+            self.current = None
+            self._skip_requested = False
+            self.voice_client.stop()
+            if self.wave:
+                self.wave.pending.appendleft(current)
+                self.wave.pending.appendleft(previous)
+            else:
+                self.queue.add_first(current)
+                self.queue.add_first(previous)
+            await self._persist()
+            await self.close_panel()
         asyncio.create_task(self.play_next())
 
     def toggle_pause(self) -> bool | None:
@@ -257,22 +354,27 @@ class MusicPlayer:
         self.require_normal_mode()
         track = self.queue.remove(position)
         await self._persist()
+        await self.refresh_panel()
         return track
 
     async def shuffle(self) -> int:
         self.require_normal_mode()
         self.queue.shuffle()
         await self._persist()
+        await self.refresh_panel()
         return self.queue.size()
 
     async def clear_queue(self) -> None:
         self.require_normal_mode()
         self.queue.clear()
         await self._persist()
+        await self.refresh_panel()
 
     async def set_repeat(self, enabled: bool) -> None:
-        self.require_normal_mode()
+        if self._shutting_down:
+            raise RuntimeError("Плеер отключается.")
         self.repeat_enabled = enabled
+        await self.refresh_panel()
 
     async def start_disconnect_timer(self) -> None:
         self.cancel_disconnect_timer()
@@ -309,6 +411,7 @@ class MusicPlayer:
             self.voice_client.stop()
         if self.voice_client.is_connected():
             await self.voice_client.disconnect()
+        await self.close_panel()
 
     async def _persist(self) -> None:
         if self.wave_active:

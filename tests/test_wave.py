@@ -158,8 +158,8 @@ class WavePlayerTests(unittest.IsolatedAsyncioTestCase):
         await self.settle()
         with self.assertRaises(RuntimeError):
             await self.player.enqueue(track(9))
-        with self.assertRaises(RuntimeError):
-            await self.player.set_repeat(True)
+        await self.player.set_repeat(True)
+        self.assertTrue(self.player.repeat_enabled)
         epoch = self.player._epoch
         await self.player.stop_wave()
         await self.player.enqueue(track(9))
@@ -185,3 +185,58 @@ class WavePlayerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.player.wave_active)
         self.assertEqual(self.player.youtube.get_stream_url.await_count, 10)
         self.voice.play.assert_not_called()
+
+    async def test_panel_is_automatic_and_old_buttons_are_disabled(self):
+        await self.player.enqueue_many([track(1), track(2)])
+        await self.settle()
+        old_panel = self.player.panel_view
+        self.assertIsNotNone(old_panel)
+        self.assertTrue(old_panel.back.disabled)
+        self.assertEqual(len(old_panel.to_components()), 3)
+        await self.finish()
+        self.assertFalse(old_panel.active)
+        self.assertTrue(all(button.disabled for button in old_panel.children))
+        self.assertIsNot(self.player.panel_view, old_panel)
+        self.assertFalse(self.player.panel_view.back.disabled)
+
+    async def test_previous_restores_order_and_ignores_stopped_callback(self):
+        await self.player.enqueue_many([track(1), track(2), track(3)])
+        await self.settle()
+        await self.finish()
+        epoch = self.player._epoch
+        await self.player.previous()
+        await self.settle()
+        self.assertEqual(self.player.current.url, track(1).url)
+        self.assertEqual([t.url for t in self.player.queue.all()], [track(2).url, track(3).url])
+        await self.player.track_finished(epoch=epoch)
+        self.assertEqual(self.player.current.url, track(1).url)
+
+    async def test_wave_repeat_and_previous_do_not_double_count(self):
+        await self.player.start_wave("song", 3)
+        await self.settle()
+        await self.player.set_repeat(True)
+        await self.finish()
+        self.assertEqual(self.player.current.url, track(1).url)
+        self.assertEqual(self.player.wave.completed, 1)
+        await self.finish()
+        self.assertEqual(self.player.wave.completed, 1)
+        await self.player.set_repeat(False)
+        await self.finish()
+        self.assertEqual(self.player.current.url, track(2).url)
+        await self.player.previous()
+        await self.settle()
+        self.assertEqual(self.player.current.url, track(1).url)
+        await self.finish()
+        self.assertEqual(self.player.wave.completed, 1)
+        self.assertEqual(self.player.current.url, track(2).url)
+
+    async def test_shutdown_disables_panel_and_pause_updates_label(self):
+        await self.player.enqueue(track(1))
+        await self.settle()
+        panel = self.player.panel_view
+        self.voice.is_paused.return_value = True
+        await self.player.refresh_panel()
+        self.assertEqual(panel.pause.label, "Продолжить")
+        await self.player.shutdown()
+        self.assertFalse(panel.active)
+        self.assertTrue(all(button.disabled for button in panel.children))

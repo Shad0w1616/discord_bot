@@ -147,6 +147,7 @@ class MusicCommands(commands.Cog):
         try:
             player = self._player_for_control(interaction)
             paused = player.toggle_pause()
+            await player.refresh_panel()
             if paused is None:
                 await interaction.response.send_message(embed=error_embed("Сейчас ничего не играет."))
             else:
