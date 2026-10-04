@@ -55,6 +55,7 @@ class MusicCommands(commands.Cog):
                 interaction.user,
                 interaction.channel,
             )
+            player.require_normal_mode()
             available = settings.MAX_QUEUE_SIZE - player.queue.size()
             if available <= 0:
                 raise RuntimeError(
@@ -91,7 +92,47 @@ class MusicCommands(commands.Cog):
             logger.exception("Ошибка /play")
             await interaction.followup.send(embed=error_embed(str(error)))
 
+    @app_commands.command(name="wave", description="Запустить волну YouTube Mix по песне")
+    @app_commands.describe(song="Название песни или ссылка YouTube", count="Сколько треков доиграть (по умолчанию 20)")
+    @app_commands.checks.cooldown(
+        1, settings.PLAY_COOLDOWN_SECONDS,
+        key=lambda interaction: interaction.guild_id or interaction.user.id,
+    )
+    async def wave(
+        self, interaction: discord.Interaction,
+        song: str, count: app_commands.Range[int, 1, 200] = 20,
+    ) -> None:
+        await interaction.response.defer()
+        if not interaction.guild:
+            await interaction.followup.send(embed=error_embed("Команда доступна только на сервере."))
+            return
+        try:
+            player = await self.bot.voice_manager.connect(interaction.user, interaction.channel)
+            seed = await player.start_wave(song.strip(), count, interaction.user)
+            await interaction.followup.send(embed=success_embed(
+                f"Волна по **{seed.title}** запущена: {count} треков, включая стартовый.\n"
+                "Пропуски и ошибки не считаются. Остановка: /wave_stop."
+            ))
+        except RuntimeError as error:
+            await interaction.followup.send(embed=error_embed(str(error)))
+        except Exception:
+            logger.exception("Ошибка /wave")
+            await interaction.followup.send(embed=error_embed("Не удалось запустить волну. Попробуйте позже."))
+
+    @app_commands.command(name="wave_stop", description="Остановить волну и текущий трек")
+    async def wave_stop(self, interaction: discord.Interaction) -> None:
+        try:
+            player = self._player_for_control(interaction)
+            stopped = await player.stop_wave()
+            await interaction.response.send_message(embed=(
+                success_embed("Волна остановлена. Можно добавлять музыку через /play.")
+                if stopped else error_embed("Волна не запущена.")
+            ))
+        except RuntimeError as error:
+            await interaction.response.send_message(embed=error_embed(str(error)), ephemeral=True)
+
     @play.error
+    @wave.error
     async def play_error(self, interaction: discord.Interaction, error) -> None:
         if isinstance(error, app_commands.CommandOnCooldown):
             await interaction.response.send_message(
@@ -154,6 +195,22 @@ class MusicCommands(commands.Cog):
             )
             return
         page_size = 10
+        if player.wave_active:
+            wave = player.wave
+            if wave is None:
+                await interaction.response.send_message(embed=success_embed("Подбираю треки для волны…"))
+                return
+            tracks = list(wave.pending)[:max(0, wave.limit - wave.completed - bool(player.current))]
+            pages = max(1, (len(tracks) + page_size - 1) // page_size)
+            if page > pages:
+                await interaction.response.send_message(embed=error_embed(f"Доступно страниц: {pages}"), ephemeral=True)
+                return
+            start = (page - 1) * page_size
+            embed = queue_embed(tracks[start:start + page_size], current=player.current,
+                                page=page, page_size=page_size, total=len(tracks))
+            embed.title = f"Волна • доиграно {wave.completed}/{wave.limit}"
+            await interaction.response.send_message(embed=embed)
+            return
         total = player.queue.size()
         pages = max(1, (total + page_size - 1) // page_size)
         if page > pages:

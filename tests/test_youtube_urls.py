@@ -1,9 +1,4 @@
-import sys
 import unittest
-from types import SimpleNamespace
-
-sys.modules.setdefault("dotenv", SimpleNamespace(load_dotenv=lambda: None))
-sys.modules.setdefault("yt_dlp", SimpleNamespace(YoutubeDL=object))
 
 from music.youtube import YoutubeService
 

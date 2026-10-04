@@ -1,10 +1,6 @@
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-import sys
-
-sys.modules.setdefault("dotenv", SimpleNamespace(load_dotenv=lambda: None))
 
 from music.models import Track
 from music.queue import MusicQueue

@@ -580,6 +580,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 from typing import Any
 
@@ -680,6 +682,49 @@ class YoutubeService:
 
         return None
 
+    @staticmethod
+    def video_id(url: str) -> str:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        value = ""
+        if host == "youtu.be":
+            value = parsed.path.strip("/").split("/")[0]
+        elif host == "youtube.com" or host.endswith(".youtube.com"):
+            value = parse_qs(parsed.query).get("v", [""])[0]
+            parts = parsed.path.strip("/").split("/")
+            if not value and len(parts) == 2 and parts[0] in {"shorts", "embed", "live"}:
+                value = parts[1]
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", value):
+            raise RuntimeError("Для волны нужен трек с YouTube или его название.")
+        return value
+
+    async def get_mix(self, seed: Track) -> list[Track]:
+        video_id = self.video_id(seed.url)
+        url = f"https://www.youtube.com/watch?v={video_id}&list=RD{video_id}"
+        info = await self.extract(url, playlist_limit=50)
+        if not info or not info.get("entries"):
+            raise RuntimeError("YouTube не вернул Mix для этого трека. Попробуйте другую песню.")
+        tracks = []
+        for item in info["entries"]:
+            if not item or item.get("availability") in {"private", "premium_only", "subscriber_only"}:
+                continue
+            if item.get("is_live") or item.get("live_status") in {"is_live", "is_upcoming"}:
+                continue
+            try:
+                item_id = self.video_id(self._get_webpage_url(item) or "")
+            except RuntimeError:
+                continue
+            tracks.append(Track(
+                title=item.get("title") or "YouTube Mix",
+                url=f"https://www.youtube.com/watch?v={item_id}",
+                guild_id=seed.guild_id,
+                duration=item.get("duration"),
+                thumbnail=item.get("thumbnail"),
+                requester_id=seed.requester_id,
+                requester_name=seed.requester_name,
+            ))
+        return tracks
+
 
 
     # =====================================================
@@ -753,6 +798,7 @@ class YoutubeService:
         try:
 
             options = self.options.copy()
+            options.update(socket_timeout=15, retries=2, extractor_retries=2)
             if playlist_limit is not None:
                 options["playlistend"] = max(1, playlist_limit)
             with yt_dlp.YoutubeDL(options) as ydl:
