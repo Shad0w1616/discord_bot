@@ -305,6 +305,8 @@ class Settings:
         os.getenv("DAILY_VICTIMS_STATE_PATH", "data/daily_victims.json")
     )
 
+    PLAYLISTS_DB_PATH: Path = Path(os.getenv("PLAYLISTS_DB_PATH", "data/playlists.sqlite3"))
+
 
 
 

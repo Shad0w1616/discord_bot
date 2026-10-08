@@ -23,6 +23,7 @@ services:
       YTDLP_COOKIES_PATH: /app/cookies.txt
       QUEUE_STATE_PATH: /app/data/queues.json
       DAILY_VICTIMS_STATE_PATH: /app/data/daily_victims.json
+      PLAYLISTS_DB_PATH: /app/data/playlists.sqlite3
       PYTHONUNBUFFERED: "1"
 
     healthcheck:

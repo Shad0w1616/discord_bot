@@ -12,3 +12,14 @@ __pycache__
 *.log
 
 *.tmp
+
+cookies.txt
+data
+tests
+deploy
+*.sqlite3
+.venv
+venv
+artifact
+bot-image.tar.gz
+bot-image.tar.gz.sha256

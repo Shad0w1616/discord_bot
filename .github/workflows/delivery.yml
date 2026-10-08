@@ -1,0 +1,98 @@
+name: Test and deploy bot
+
+on:
+  pull_request:
+  push:
+    branches: [dvizhuha]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never interrupt a deployment halfway through replacing the container.
+concurrency:
+  group: bot-delivery-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Check Python syntax
+        run: python -m compileall -q app.py cogs music services utils deploy
+      - name: Check Ansible syntax
+        run: |
+          python -m pip install ansible-core==2.19.3
+          ansible-playbook -i deploy/inventory.ini deploy/deploy.yml --syntax-check
+      - name: Build exact revision
+        run: docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "discord-bot:$GITHUB_SHA" .
+      - name: Verify image imports and secret exclusions
+        run: |
+          docker run --rm --entrypoint python "discord-bot:$GITHUB_SHA" -c "import discord, yt_dlp; from cogs.playlists import PlaylistCommands; from pathlib import Path; assert not Path('/app/.env').exists(); assert not Path('/app/cookies.txt').exists(); assert not Path('/app/data').exists()"
+      - name: Export tested image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dvizhuha'
+        run: |
+          docker save "discord-bot:$GITHUB_SHA" | gzip > bot-image.tar.gz
+          sha256sum bot-image.tar.gz > bot-image.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dvizhuha'
+        with:
+          name: bot-image-${{ github.sha }}
+          path: |
+            bot-image.tar.gz
+            bot-image.tar.gz.sha256
+          retention-days: 3
+          compression-level: 0
+
+  deploy-finland:
+    needs: test-and-build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dvizhuha'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    concurrency:
+      group: discord-bot-finland
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v4
+        with:
+          name: bot-image-${{ github.sha }}
+          path: artifact
+      - name: Install Ansible
+        run: python -m pip install ansible-core==2.19.3
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_SSH_KEY" || { echo 'Missing production secret DEPLOY_SSH_KEY'; exit 1; }
+          test -n "$DEPLOY_KNOWN_HOSTS" || { echo 'Missing production secret DEPLOY_KNOWN_HOSTS'; exit 1; }
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts"
+      - name: Deploy tested image through Ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: 'True'
+        run: |
+          ansible-playbook -i deploy/inventory.ini deploy/deploy.yml \
+            --private-key "$HOME/.ssh/deploy_key" \
+            -e "release_sha=$GITHUB_SHA" \
+            -e "artifact_dir=$GITHUB_WORKSPACE/artifact"
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f "$HOME/.ssh/deploy_key"

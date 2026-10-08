@@ -1,0 +1,46 @@
+---
+- name: Deploy tested Discord bot image to Finland
+  hosts: finland
+  gather_facts: false
+  serial: 1
+  vars:
+    app_dir: /opt/discord-bot
+  tasks:
+    - name: Validate release identifier
+      ansible.builtin.assert:
+        that:
+          - release_sha is defined
+          - release_sha is match('^[0-9a-f]{40}$')
+          - artifact_dir is defined
+    - name: Create release directory
+      ansible.builtin.file:
+        path: "{{ app_dir }}/releases/{{ release_sha }}"
+        state: directory
+        mode: '0700'
+    - name: Upload tested image and checksum
+      ansible.builtin.copy:
+        src: "{{ artifact_dir }}/{{ item }}"
+        dest: "{{ app_dir }}/releases/{{ release_sha }}/{{ item }}"
+        mode: '0600'
+      loop:
+        - bot-image.tar.gz
+        - bot-image.tar.gz.sha256
+    - name: Upload deployment program
+      ansible.builtin.copy:
+        src: release.py
+        dest: "{{ app_dir }}/releases/{{ release_sha }}/release.py"
+        mode: '0700'
+    - name: Activate release and verify health (rollback on failure)
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ app_dir }}/releases/{{ release_sha }}/release.py"
+          - --app-dir
+          - "{{ app_dir }}"
+          - --sha
+          - "{{ release_sha }}"
+      register: deployment
+      changed_when: true
+    - name: Show deployed revision
+      ansible.builtin.debug:
+        var: deployment.stdout_lines

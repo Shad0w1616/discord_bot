@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from dataclasses import replace
 
 import discord
 
@@ -132,6 +133,14 @@ class PlayerControls(discord.ui.View):
     async def stop_playback(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.run_action(interaction, "stop")
 
+    @discord.ui.button(label="В плейлист", emoji="💾", style=discord.ButtonStyle.success, row=2)
+    async def save_playlist(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.check_access(interaction)
+        await interaction.response.send_modal(SaveTrackModal(
+            interaction.client.playlists, self.player.guild_id, interaction.user.id,
+            replace(self.player.current),
+        ))
+
     @discord.ui.button(label="Отключить", emoji="🔌", row=2)
     async def disconnect(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.run_action(interaction, "disconnect")
@@ -167,3 +176,27 @@ class RemoveTrackModal(discord.ui.Modal, title="Удалить трек из о�
 
     async def on_error(self, interaction, error) -> None:
         await self.panel.on_error(interaction, error, None)
+
+
+class SaveTrackModal(discord.ui.Modal, title="Сохранить трек в мой плейлист"):
+    name = discord.ui.TextInput(label="Название (новый плейлист создастся сам)", min_length=1, max_length=50)
+
+    def __init__(self, store, guild_id, user_id, track):
+        super().__init__(timeout=180)
+        self.store, self.guild_id, self.user_id, self.track = store, guild_id, user_id, track
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        if interaction.guild_id != self.guild_id or interaction.user.id != self.user_id:
+            await interaction.followup.send("Эта форма принадлежит другому пользователю.", ephemeral=True)
+            return
+        try:
+            await self.store.execute("add", self.guild_id, self.user_id, self.name.value, track=self.track)
+            await interaction.followup.send(f"Сохранён трек: {self.track.title[:200]}",
+                                            ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        except ValueError as error:
+            await interaction.followup.send(str(error), ephemeral=True)
+
+    async def on_error(self, interaction, error):
+        logger.error("Ошибка сохранения плейлиста", exc_info=(type(error), error, error.__traceback__))
+        await interaction.followup.send("Не удалось сохранить трек. Попробуйте позже.", ephemeral=True)
