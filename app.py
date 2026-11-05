@@ -9,6 +9,7 @@ from aiohttp import web
 
 from settings import settings
 from services.voice import VoiceManager
+from services.channel_policy import ChannelCommandTree
 from music.playlists import PlaylistStore
 
 from utils.logger import logger
@@ -39,7 +40,8 @@ class NotoriousBot(commands.Bot):
 
         super().__init__(
             command_prefix=settings.COMMAND_PREFIX,
-            intents=intents
+            intents=intents,
+            tree_cls=ChannelCommandTree,
         )
 
         self.voice_manager = VoiceManager(self)

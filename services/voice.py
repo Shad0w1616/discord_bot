@@ -6,6 +6,7 @@ import discord
 
 from music.player import MusicPlayer
 from music.storage import QueueStorage
+from services.channel_policy import routed_channel
 from settings import settings
 from utils.logger import logger
 
@@ -27,6 +28,7 @@ class VoiceManager:
             raise RuntimeError("Сначала зайдите в голосовой канал.")
 
         guild_id = member.guild.id
+        text_channel = routed_channel(member.guild, text_channel)
         voice_channel = member.voice.channel
         existing = self.players.get(guild_id)
         if existing and existing.voice_client.is_connected():

@@ -7,6 +7,7 @@ import discord
 
 from utils.embeds import error_embed, queue_embed, success_embed
 from utils.logger import logger
+from services.channel_policy import check_channel
 
 if TYPE_CHECKING:
     from music.player import MusicPlayer
@@ -46,6 +47,8 @@ class PlayerControls(discord.ui.View):
             raise RuntimeError("Для остановки обычного плеера и очистки очереди нужны права администратора.")
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not await check_channel(interaction):
+            return False
         try:
             self.check_access(interaction)
             return True
@@ -186,6 +189,8 @@ class SaveTrackModal(discord.ui.Modal, title="Сохранить трек в м�
         self.store, self.guild_id, self.user_id, self.track = store, guild_id, user_id, track
 
     async def on_submit(self, interaction: discord.Interaction):
+        if not await check_channel(interaction):
+            return
         await interaction.response.defer(ephemeral=True)
         if interaction.guild_id != self.guild_id or interaction.user.id != self.user_id:
             await interaction.followup.send("Эта форма принадлежит другому пользователю.", ephemeral=True)

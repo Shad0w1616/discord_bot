@@ -12,6 +12,7 @@ from music.storage import QueueStorage
 from music.youtube import YoutubeService
 from music.wave import WaveSession
 from music.controls import PlayerControls
+from services.channel_policy import routed_channel
 from settings import settings
 from utils.embeds import error_embed, now_playing_embed
 from utils.logger import logger
@@ -47,6 +48,14 @@ class MusicPlayer:
         self.panel_view: PlayerControls | None = None
         self.panel_message: discord.Message | None = None
         self._panel_lock = asyncio.Lock()
+
+    @property
+    def text_channel(self):
+        return routed_channel(self.voice_client.guild, self._text_channel)
+
+    @text_channel.setter
+    def text_channel(self, channel):
+        self._text_channel = channel
 
     def panel_embed(self) -> discord.Embed:
         embed = now_playing_embed(self.current)

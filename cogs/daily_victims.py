@@ -14,6 +14,7 @@ from discord.ext import commands, tasks
 from settings import settings
 from utils.embeds import error_embed, success_embed
 from utils.logger import logger
+from services.channel_policy import routed_channel, TARGET_GUILD_ID
 
 
 MSK = timezone(timedelta(hours=3), name="MSK")
@@ -146,6 +147,7 @@ class DailyVictims(commands.Cog):
         guild: discord.Guild,
         channel: discord.abc.Messageable,
     ) -> None:
+        channel = routed_channel(guild, channel, victims=True)
         eligible = await self._eligible_members(guild)
         selected = choose_members(eligible)
         if not selected:
@@ -176,13 +178,13 @@ class DailyVictims(commands.Cog):
                 continue
             guild = self.bot.get_guild(parsed_guild_id)
             channel = self.bot.get_channel(config.get("channel_id", 0))
-            if not guild or not channel:
+            if not guild or (not channel and guild.id != TARGET_GUILD_ID):
                 logger.warning("Канал рубрики недоступен guild=%s", guild_id)
                 continue
             try:
                 await self._send_rubric(guild, channel)
                 await self.storage.mark_sent(guild.id, today)
-                logger.info("Рубрика отправлена guild=%s channel=%s", guild.id, channel.id)
+                logger.info("Рубрика отправлена guild=%s", guild.id)
             except (discord.HTTPException, RuntimeError):
                 logger.exception("Не удалось отправить рубрику guild=%s", guild_id)
 
@@ -207,6 +209,11 @@ class DailyVictims(commands.Cog):
             )
             return
         target = channel or interaction.channel
+        try:
+            target = routed_channel(interaction.guild, target, victims=True)
+        except RuntimeError as error:
+            await interaction.response.send_message(embed=error_embed(str(error)), ephemeral=True)
+            return
         if not isinstance(target, discord.TextChannel):
             await interaction.response.send_message(
                 embed=error_embed("Выберите обычный текстовый канал."),
