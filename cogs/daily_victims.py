@@ -20,6 +20,7 @@ from services.channel_policy import routed_channel, TARGET_GUILD_ID
 MSK = timezone(timedelta(hours=3), name="MSK")
 CATEGORIES = (
     "Убери Телефон дня",
+    "Под гнётом свинцового купола в центре бессветного Урабана",
     "Алтушка Грязнулька дня",
     "Не выпадет пиратский жетон дня",
     "Выпадет пиратский жетон дня",
